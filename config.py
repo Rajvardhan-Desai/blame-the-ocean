@@ -111,6 +111,36 @@ DOMAINS: Dict[str, Dict] = {
         "lon_min":   9.0,"lon_max":  30.0,
         "lat_min":  53.0,"lat_max":  66.0,
     },
+    # Full Indian Ocean basin
+    "indian_ocean": {
+        "lon_min":  20.0, "lon_max": 120.0,
+        "lat_min": -60.0, "lat_max":  30.0,
+    },
+    # Arabian Sea (nutrient-rich, strong monsoon forcing, seasonal blooms)
+    "arabian_sea": {
+        "lon_min":  50.0, "lon_max":  78.0,
+        "lat_min":   5.0, "lat_max":  25.0,
+    },
+    # Bay of Bengal (river discharge dominated — high relevance for MM-MARAS)
+    "bay_of_bengal": {
+        "lon_min":  80.0, "lon_max": 100.0,
+        "lat_min":   5.0, "lat_max":  23.0,
+    },
+    # Lakshadweep Sea / southwest India coast (coastal upwelling zone)
+    "lakshadweep_sea": {
+        "lon_min":  70.0, "lon_max":  80.0,
+        "lat_min":   5.0, "lat_max":  15.0,
+    },
+    # Andaman Sea (semi-enclosed, strong river/runoff signal)
+    "andaman_sea": {
+        "lon_min":  92.0, "lon_max": 100.0,
+        "lat_min":   6.0, "lat_max":  16.0,
+    },
+    # Somali / northwest Indian Ocean (Somali Current, upwelling)
+    "somali_basin": {
+        "lon_min":  40.0, "lon_max":  65.0,
+        "lat_min":  -5.0, "lat_max":  15.0,
+    },
 }
 
 # Default domain used throughout the pipeline
