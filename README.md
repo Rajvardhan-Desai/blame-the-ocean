@@ -202,7 +202,3 @@ ERA5 is downloaded one calendar month at a time to stay within CDS API size limi
 - `cfgrib` + `eccodes` for GloFAS GRIB2 loading
 
 ---
-
-## License
-
-MIT
