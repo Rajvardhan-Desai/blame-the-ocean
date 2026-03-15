@@ -456,8 +456,8 @@ def download_era5_precipitation(
     """
     Download ERA5 total precipitation AND 10m wind components from CDS.
 
-    Pulling wind here alongside precipitation keeps all CDS downloads in
-    one request and avoids a separate CMEMS wind dataset for historical runs.
+    Downloads one calendar month at a time to stay within CDS request size
+    limits (~720 hourly steps per month), then merges into a single output file.
 
     Variables downloaded:
         total_precipitation       → "tp"  (m/hour accumulated → daily mm in pipeline)
@@ -473,43 +473,92 @@ def download_era5_precipitation(
         raise ImportError("pip install cdsapi pandas")
 
     os.makedirs(output_dir, exist_ok=True)
-    output_path = Path(output_dir) / f"era5_precip_wind_{date_start}_{date_end}.nc"
+    merged_path = Path(output_dir) / f"era5_precip_wind_{date_start}_{date_end}.nc"
 
-    if output_path.exists():
-        logger.info(f"ERA5 file already exists, skipping: {output_path}")
-        return output_path
+    if merged_path.exists():
+        logger.info(f"ERA5 file already exists, skipping: {merged_path}")
+        return merged_path
 
-    dates  = pd.date_range(date_start, date_end, freq="D")
-    years  = sorted(set(str(d.year)         for d in dates))
-    months = sorted(set(f"{d.month:02d}"    for d in dates))
-    days   = sorted(set(f"{d.day:02d}"      for d in dates))
-
-    logger.info(f"Downloading ERA5 precipitation + 10m wind | {date_start} to {date_end}")
+    # Build list of (year, month) tuples covering the requested date range
+    full_range   = pd.date_range(date_start, date_end, freq="MS")  # month starts
+    year_months  = [(ts.year, ts.month) for ts in full_range]
+    # Include the final month if date_end doesn't land on a month start
+    end_ts = pd.Timestamp(date_end)
+    if (end_ts.year, end_ts.month) not in year_months:
+        year_months.append((end_ts.year, end_ts.month))
 
     client = cdsapi.Client()
-    client.retrieve(
-        "reanalysis-era5-single-levels",
-        {
-            "product_type": ["reanalysis"],
-            "variable":     [
-                "total_precipitation",
-                "10m_u_component_of_wind",
-                "10m_v_component_of_wind",
-            ],
-            "year":         years,
-            "month":        months,
-            "day":          days,
-            "time":         [f"{h:02d}:00" for h in range(24)],
-            "area":         [lat_max, lon_min, lat_min, lon_max],  # N W S E
-            "data_format":  "netcdf",
-            "grid":         ["0.25", "0.25"],
-        },
-        str(output_path),
+    chunk_paths = []
+
+    for year, month in year_months:
+        chunk_path = Path(output_dir) / f"era5_precip_wind_{year}_{month:02d}.nc"
+
+        if chunk_path.exists():
+            logger.info(f"ERA5 {year}-{month:02d} already exists, skipping.")
+            chunk_paths.append(chunk_path)
+            continue
+
+        # Days present in this month that fall within the requested range
+        month_start = max(
+            pd.Timestamp(f"{year}-{month:02d}-01"),
+            pd.Timestamp(date_start),
+        )
+        month_end = min(
+            pd.Timestamp(f"{year}-{month:02d}-01") + pd.offsets.MonthEnd(1),
+            pd.Timestamp(date_end),
+        )
+        days = sorted(set(
+            f"{d.day:02d}"
+            for d in pd.date_range(month_start, month_end, freq="D")
+        ))
+
+        logger.info(
+            f"Downloading ERA5 | {year}-{month:02d} "
+            f"({month_start.date()} to {month_end.date()})"
+        )
+
+        client.retrieve(
+            "reanalysis-era5-single-levels",
+            {
+                "product_type": ["reanalysis"],
+                "variable": [
+                    "total_precipitation",
+                    "10m_u_component_of_wind",
+                    "10m_v_component_of_wind",
+                ],
+                "year":  [str(year)],
+                "month": [f"{month:02d}"],
+                "day":   days,
+                "time":  [f"{h:02d}:00" for h in range(24)],
+                "area":  [lat_max, lon_min, lat_min, lon_max],  # N W S E
+                "data_format": "netcdf",
+                "grid":  ["0.25", "0.25"],
+            },
+            str(chunk_path),
+        )
+
+        logger.info(f"ERA5 {year}-{month:02d} saved to: {chunk_path}")
+        chunk_paths.append(chunk_path)
+
+    # Merge all monthly files into one
+    logger.info(f"Merging {len(chunk_paths)} monthly ERA5 files → {merged_path}")
+    ds_merged = xr.open_mfdataset(
+        [str(p) for p in chunk_paths],
+        combine="by_coords",
+        engine="netcdf4",
     )
+    ds_merged.to_netcdf(str(merged_path))
+    ds_merged.close()
 
-    logger.info(f"ERA5 saved to: {output_path}")
+    # Clean up per-month files
+    for p in chunk_paths:
+        try:
+            p.unlink()
+        except OSError:
+            pass
 
-    return output_path
+    logger.info(f"ERA5 merged file saved to: {merged_path}")
+    return merged_path
 
 
 def load_glofas(path: Union[str, Path]) -> xr.Dataset:
