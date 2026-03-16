@@ -3,6 +3,9 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+smoke_test.py
+smoke_test_log.txt
+
 # C extensions
 *.so
 
@@ -92,6 +95,7 @@ __pypackages__/
 celerybeat-schedule
 celerybeat.pid
 
+start
 # SageMath parsed files
 *.sage.py
 

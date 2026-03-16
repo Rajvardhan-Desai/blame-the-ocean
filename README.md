@@ -112,7 +112,8 @@ python pipeline.py --domain gulf_of_mexico
 python pipeline.py --no-download \
   --chl data/raw/chl.nc \
   --physics data/raw/physics.nc \
-  --wind data/raw/wind.nc
+  --era5 data/raw/era5_precip_wind.nc \
+  --discharge data/raw/glofas_discharge.grib2
 ```
 
 ### Reuse existing normalization stats
@@ -125,10 +126,12 @@ python pipeline.py --domain bay_of_bengal --load-stats
 
 ```
 --domain        Spatial domain preset (default: gulf_of_mexico)
---no-download   Skip data download; use --chl, --physics, --wind paths
+--no-download   Skip data download; use --chl, --physics, --era5, --discharge paths
 --chl           Path to Chl-a NetCDF (when --no-download)
 --physics       Path to physics NetCDF (when --no-download)
---wind          Path to wind/precip NetCDF (when --no-download)
+--era5          Path to ERA5 NetCDF containing tp, u10, v10 (when --no-download)
+--discharge     Path to GloFAS GRIB2 file (when --no-download)
+--wind          Deprecated alias for --era5 (backward compatibility)
 --bathy         Path to bathymetry file (optional; zeros used if omitted)
 --load-stats    Load existing normalization stats instead of recomputing
 ```

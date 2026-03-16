@@ -404,7 +404,8 @@ def run_pipeline(
     download: bool = True,
     chl_path: Optional[str] = None,
     physics_path: Optional[str] = None,
-    wind_path: Optional[str] = None,
+    era5_path: Optional[str] = None,
+    discharge_path: Optional[str] = None,
     recompute_stats: bool = True,
 ) -> None:
     """
@@ -418,7 +419,8 @@ def run_pipeline(
                        if False, paths must be provided via chl_path etc.
     chl_path         : path to existing Chl-a file (used when download=False)
     physics_path     : path to existing physics file
-    wind_path        : path to existing wind file
+    era5_path        : path to existing ERA5 NetCDF containing tp/u10/v10
+    discharge_path   : path to existing GloFAS GRIB2 discharge file
     recompute_stats  : if True, recompute normalization stats from training data
     """
     domain = cfg.DOMAINS[domain_name]
@@ -431,14 +433,16 @@ def run_pipeline(
     if download:
         paths = step_download(domain)
     else:
-        if not all([chl_path, physics_path, wind_path]):
+        if not all([chl_path, physics_path, era5_path, discharge_path]):
             raise ValueError(
-                "When download=False, provide chl_path, physics_path, and wind_path."
+                "When download=False, provide chl_path, physics_path, "
+                "era5_path, and discharge_path."
             )
         paths = {
             "chl":     chl_path,
             "physics": physics_path,
-            "wind":    wind_path,
+            "era5":    era5_path,
+            "discharge": discharge_path,
         }
 
     # Step 2
@@ -483,7 +487,18 @@ if __name__ == "__main__":
     )
     parser.add_argument("--chl",     type=str, default=None, help="Path to Chl-a NetCDF")
     parser.add_argument("--physics", type=str, default=None, help="Path to physics NetCDF")
-    parser.add_argument("--wind",    type=str, default=None, help="Path to wind NetCDF")
+    parser.add_argument(
+        "--era5", type=str, default=None,
+        help="Path to ERA5 NetCDF containing tp, u10, v10"
+    )
+    parser.add_argument(
+        "--discharge", type=str, default=None,
+        help="Path to GloFAS discharge GRIB2 file"
+    )
+    parser.add_argument(
+        "--wind", type=str, default=None,
+        help="Deprecated alias for --era5 (kept for backward compatibility)"
+    )
     parser.add_argument("--bathy",   type=str, default=None, help="Path to bathymetry file")
     parser.add_argument(
         "--load-stats", action="store_true",
@@ -491,12 +506,16 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
+    # Backward compatibility: allow old --wind flag as alias for --era5
+    era5_path = args.era5 or args.wind
+
     run_pipeline(
         domain_name      = args.domain,
         bathymetry_path  = args.bathy,
         download         = not args.no_download,
         chl_path         = args.chl,
         physics_path     = args.physics,
-        wind_path        = args.wind,
+        era5_path        = era5_path,
+        discharge_path   = args.discharge,
         recompute_stats  = not args.load_stats,
     )
