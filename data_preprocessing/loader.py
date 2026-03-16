@@ -14,6 +14,8 @@ module works the same way regardless of source format.
 import os
 import glob
 import logging
+import shutil
+import zipfile
 from pathlib import Path
 from typing import List, Optional, Union
 
@@ -536,6 +538,30 @@ def download_era5_precipitation(
             },
             str(chunk_path),
         )
+
+        # CDS may return a ZIP payload even when data_format='netcdf'.
+        # In that case, extract the first .nc member and replace chunk_path.
+        try:
+            with open(chunk_path, "rb") as handle:
+                is_zip_payload = handle.read(4).startswith(b"PK\x03\x04")
+        except OSError as e:
+            raise RuntimeError(f"Could not inspect ERA5 chunk file {chunk_path}: {e}")
+
+        if is_zip_payload:
+            logger.warning(f"ERA5 {year}-{month:02d} returned ZIP payload; extracting NetCDF")
+            with zipfile.ZipFile(chunk_path, "r") as archive:
+                nc_members = [name for name in archive.namelist() if name.lower().endswith(".nc")]
+                if not nc_members:
+                    raise RuntimeError(
+                        f"ZIP payload for ERA5 {year}-{month:02d} did not contain a .nc file"
+                    )
+
+                tmp_nc_path = chunk_path.with_suffix(".tmp.nc")
+                with archive.open(nc_members[0], "r") as src, open(tmp_nc_path, "wb") as dst:
+                    shutil.copyfileobj(src, dst)
+
+            chunk_path.unlink(missing_ok=True)
+            tmp_nc_path.replace(chunk_path)
 
         logger.info(f"ERA5 {year}-{month:02d} saved to: {chunk_path}")
         chunk_paths.append(chunk_path)
