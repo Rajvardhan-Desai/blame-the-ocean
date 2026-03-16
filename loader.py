@@ -393,15 +393,18 @@ def download_glofas(
     """
     Download GloFAS v4.0 river discharge reanalysis via cdsapi.
 
+    Downloads one year at a time to stay within CEMS request size limits,
+    then concatenates yearly GRIB2 files using cfgrib + xarray and saves
+    the result as a single NetCDF file.
+
     Dataset : cems-glofas-historical (Copernicus Emergency Management Service)
     Variable: river_discharge_in_the_last_24_hours  (m³/s, daily, 0.05°)
-    Format  : GRIB2 (open with cfgrib: xr.open_dataset(path, engine='cfgrib'))
 
     Requires
     --------
     pip install cdsapi cfgrib eccodes
-    CDS credentials in ~/.cdsapirc  →  https://cds.climate.copernicus.eu/how-to-api
-    API endpoint for CEMS datasets  →  https://ewds.climate.copernicus.eu/api
+    CDS credentials in ~/.cdsapirc  ->  https://cds.climate.copernicus.eu/how-to-api
+    API endpoint for CEMS datasets  ->  https://ewds.climate.copernicus.eu/api
     """
     try:
         import cdsapi
@@ -410,38 +413,74 @@ def download_glofas(
         raise ImportError("pip install cdsapi pandas")
 
     os.makedirs(output_dir, exist_ok=True)
-    output_path = Path(output_dir) / f"glofas_{date_start}_{date_end}.grib2"
+    merged_path = Path(output_dir) / f"glofas_{date_start}_{date_end}.nc"
 
-    if output_path.exists():
-        logger.info(f"GloFAS file already exists, skipping: {output_path}")
-        return output_path
+    if merged_path.exists():
+        logger.info(f"GloFAS file already exists, skipping: {merged_path}")
+        return merged_path
 
-    dates  = pd.date_range(date_start, date_end, freq="D")
-    years  = sorted(set(str(d.year)         for d in dates))
-    months = sorted(set(f"{d.month:02d}"    for d in dates))
-    days   = sorted(set(f"{d.day:02d}"      for d in dates))
-
-    logger.info(f"Downloading GloFAS discharge | {date_start} to {date_end}")
+    full_range = pd.date_range(date_start, date_end, freq="D")
+    years = sorted(set(d.year for d in full_range))
 
     client = cdsapi.Client(url="https://ewds.climate.copernicus.eu/api")
-    client.retrieve(
-        "cems-glofas-historical",
-        {
-            "system_version":     [system_version],
-            "hydrological_model": ["lisflood"],
-            "product_type":       ["consolidated"],
-            "variable":           ["river_discharge_in_the_last_24_hours"],
-            "hyear":              years,
-            "hmonth":             months,
-            "hday":               days,
-            "data_format":        "grib2",
-            "download_format":    "unarchived",
-            "area":               [lat_max, lon_min, lat_min, lon_max],  # N W S E
-        },
-    ).download(str(output_path))
+    yearly_paths = []
 
-    logger.info(f"GloFAS saved to: {output_path}")
-    return output_path
+    for year in years:
+        year_path = Path(output_dir) / f"glofas_{year}.grib2"
+
+        if year_path.exists():
+            logger.info(f"GloFAS {year} already exists, skipping.")
+            yearly_paths.append(year_path)
+            continue
+
+        year_start = max(pd.Timestamp(f"{year}-01-01"), pd.Timestamp(date_start))
+        year_end   = min(pd.Timestamp(f"{year}-12-31"), pd.Timestamp(date_end))
+        year_dates = pd.date_range(year_start, year_end, freq="D")
+
+        months = sorted(set(f"{d.month:02d}" for d in year_dates))
+        days   = sorted(set(f"{d.day:02d}"   for d in year_dates))
+
+        logger.info(f"Downloading GloFAS discharge | year {year} ({year_start.date()} to {year_end.date()})")
+
+        client.retrieve(
+            "cems-glofas-historical",
+            {
+                "system_version":     [system_version],
+                "hydrological_model": ["lisflood"],
+                "product_type":       ["consolidated"],
+                "variable":           ["river_discharge_in_the_last_24_hours"],
+                "hyear":              [str(year)],
+                "hmonth":             months,
+                "hday":               days,
+                "data_format":        "grib2",
+                "download_format":    "unarchived",
+                "area":               [lat_max, lon_min, lat_min, lon_max],  # N W S E
+            },
+        ).download(str(year_path))
+
+        logger.info(f"GloFAS {year} saved to: {year_path}")
+        yearly_paths.append(year_path)
+
+    # Convert yearly GRIB2 files to a single NetCDF
+    logger.info(f"Merging {len(yearly_paths)} yearly GloFAS files -> {merged_path}")
+    datasets = []
+    for p in yearly_paths:
+        ds = xr.open_dataset(str(p), engine="cfgrib")
+        datasets.append(ds.load())
+        ds.close()
+
+    ds_merged = xr.concat(datasets, dim="time").sortby("time")
+    ds_merged.to_netcdf(str(merged_path))
+    ds_merged.close()
+
+    for p in yearly_paths:
+        try:
+            p.unlink()
+        except OSError:
+            pass
+
+    logger.info(f"GloFAS merged file saved to: {merged_path}")
+    return merged_path
 
 
 def _extract_nc_from_zip(zip_path, dest_path):
@@ -630,20 +669,27 @@ def download_era5_precipitation(
 
 def load_glofas(path: Union[str, Path]) -> xr.Dataset:
     """
-    Load a GloFAS GRIB2 file into an xarray Dataset.
+    Load a GloFAS file into an xarray Dataset.
+    Supports both NetCDF (.nc) and GRIB2 (.grib2) formats.
     Renames latitude/longitude to lat/lon for pipeline consistency.
     Discharge variable is named 'dis24' (m³/s).
 
-    Requires: pip install cfgrib eccodes
+    Requires: pip install cfgrib eccodes  (for GRIB2 only)
     """
-    logger.info(f"Loading GloFAS GRIB2: {path}")
-    try:
-        ds = xr.open_dataset(str(path), engine="cfgrib")
-    except Exception as e:
-        raise RuntimeError(
-            f"Failed to open GloFAS file: {e}\n"
-            "Install: pip install cfgrib eccodes"
-        )
+    path = Path(path)
+    logger.info(f"Loading GloFAS: {path}")
+
+    if path.suffix.lower() in (".nc", ".nc4"):
+        ds = xr.open_dataset(str(path), engine="netcdf4")
+    else:
+        try:
+            ds = xr.open_dataset(str(path), engine="cfgrib")
+        except Exception as e:
+            raise RuntimeError(
+                f"Failed to open GloFAS file: {e}\n"
+                "Install: pip install cfgrib eccodes"
+            )
+
     rename = {}
     if "latitude"  in ds.coords: rename["latitude"]  = "lat"
     if "longitude" in ds.coords: rename["longitude"] = "lon"
