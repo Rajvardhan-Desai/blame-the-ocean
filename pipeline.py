@@ -192,10 +192,8 @@ def step_build_masks(aligned: dict) -> xr.Dataset:
     logger.info("STEP 3: Building masks")
 
     chl_da = aligned["chl"]["chl"]  # raw Chl-a DataArray
-    # BGC dataset includes a depth coordinate even for surface products.
-    # Squeeze it out so all masks are (time, lat, lon) not (time, depth, lat, lon).
     if "depth" in chl_da.dims:
-        chl_da = chl_da.squeeze("depth", drop=True)
+        chl_da = chl_da.isel(depth=0, drop=True)
 
     mask_ds = build_all_masks(
         chl            = chl_da,
@@ -235,10 +233,9 @@ def step_normalize(
         T_total = aligned["chl"].sizes["time"]
         train_slice, _, _ = temporal_split(T_total)
 
-        # Drop depth dim if present before computing stats
         chl_aligned = aligned["chl"]
         if "depth" in chl_aligned["chl"].dims:
-            chl_aligned = chl_aligned.squeeze("depth", drop=True)
+            chl_aligned = xr.Dataset({"chl": chl_aligned["chl"].isel(depth=0, drop=True)})
         chl_train     = chl_aligned.isel(time=train_slice)
         physics_train = aligned["physics"].isel(time=train_slice)
         wind_train    = aligned["wind"].isel(time=train_slice)
@@ -266,7 +263,10 @@ def step_normalize(
         all_stats = load_stats(stats_path)
 
     # Apply normalization
-    chl_norm     = normalize_dataset(aligned["chl"],     all_stats, cfg.BGC_VARIABLES)
+    chl_ds_surface = aligned["chl"]
+    if "depth" in chl_ds_surface["chl"].dims:
+        chl_ds_surface = xr.Dataset({"chl": chl_ds_surface["chl"].isel(depth=0, drop=True)})
+    chl_norm     = normalize_dataset(chl_ds_surface, all_stats, cfg.BGC_VARIABLES)
     physics_norm = normalize_dataset(aligned["physics"], all_stats, cfg.PHY_VARIABLES)
     wind_norm    = normalize_dataset(aligned["wind"],    all_stats, cfg.WIND_VARIABLES)
 
@@ -313,7 +313,10 @@ def step_build_static(
 
     # Distance-to-coast: approximate from land mask (Euclidean distance transform)
     from masker import build_land_mask
-    land_mask = build_land_mask(chl_ds["chl"])
+    chl_da_static = chl_ds["chl"]
+    if "depth" in chl_da_static.dims:
+        chl_da_static = chl_da_static.isel(depth=0, drop=True)
+    land_mask = build_land_mask(chl_da_static)
     ocean_bool = land_mask.values.astype(bool)
     from scipy import ndimage
     dist_arr = ndimage.distance_transform_edt(ocean_bool).astype(np.float32)
@@ -350,7 +353,7 @@ def step_extract_patches(
 
     chl_var = normalized["chl"]["chl"]
     if "depth" in chl_var.dims:
-        chl_var = chl_var.squeeze("depth", drop=True)
+        chl_var = chl_var.isel(depth=0, drop=True)
     chl_np  = chl_var.values             # (T, H, W)
     obs_np  = mask_ds["obs_mask"].values                  # (T, H, W)
     mcar_np = mask_ds["mcar_mask"].values                 # (T, H, W)
