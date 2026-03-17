@@ -192,6 +192,10 @@ def step_build_masks(aligned: dict) -> xr.Dataset:
     logger.info("STEP 3: Building masks")
 
     chl_da = aligned["chl"]["chl"]  # raw Chl-a DataArray
+    # BGC dataset includes a depth coordinate even for surface products.
+    # Squeeze it out so all masks are (time, lat, lon) not (time, depth, lat, lon).
+    if "depth" in chl_da.dims:
+        chl_da = chl_da.squeeze("depth", drop=True)
 
     mask_ds = build_all_masks(
         chl            = chl_da,
@@ -231,7 +235,11 @@ def step_normalize(
         T_total = aligned["chl"].sizes["time"]
         train_slice, _, _ = temporal_split(T_total)
 
-        chl_train     = aligned["chl"].isel(time=train_slice)
+        # Drop depth dim if present before computing stats
+        chl_aligned = aligned["chl"]
+        if "depth" in chl_aligned["chl"].dims:
+            chl_aligned = chl_aligned.squeeze("depth", drop=True)
+        chl_train     = chl_aligned.isel(time=train_slice)
         physics_train = aligned["physics"].isel(time=train_slice)
         wind_train    = aligned["wind"].isel(time=train_slice)
 
@@ -340,7 +348,10 @@ def step_extract_patches(
     """
     logger.info("STEP 6: Extracting and saving patches")
 
-    chl_np  = normalized["chl"]["chl"].values             # (T, H, W)
+    chl_var = normalized["chl"]["chl"]
+    if "depth" in chl_var.dims:
+        chl_var = chl_var.squeeze("depth", drop=True)
+    chl_np  = chl_var.values             # (T, H, W)
     obs_np  = mask_ds["obs_mask"].values                  # (T, H, W)
     mcar_np = mask_ds["mcar_mask"].values                 # (T, H, W)
     mnar_np = mask_ds["mnar_mask"].values                 # (T, H, W)
@@ -355,9 +366,9 @@ def step_extract_patches(
     wind_arrays = [normalized["wind"][v].values for v in cfg.WIND_VARIABLES]
     wind_np = np.stack(wind_arrays, axis=1).astype(np.float32)
 
-    lats  = normalized["chl"]["chl"].lat.values
-    lons  = normalized["chl"]["chl"].lon.values
-    times = normalized["chl"]["chl"].time.values
+    lats  = chl_var.lat.values
+    lons  = chl_var.lon.values
+    times = chl_var.time.values
 
     T_total = len(times)
     train_sl, val_sl, test_sl = temporal_split(T_total)
