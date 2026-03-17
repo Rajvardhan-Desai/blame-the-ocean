@@ -111,40 +111,10 @@ DOMAINS: Dict[str, Dict] = {
         "lon_min":   9.0,"lon_max":  30.0,
         "lat_min":  53.0,"lat_max":  66.0,
     },
-    # Full Indian Ocean basin
-    "indian_ocean": {
-        "lon_min":  20.0, "lon_max": 120.0,
-        "lat_min": -60.0, "lat_max":  30.0,
-    },
-    # Arabian Sea (nutrient-rich, strong monsoon forcing, seasonal blooms)
-    "arabian_sea": {
-        "lon_min":  50.0, "lon_max":  78.0,
-        "lat_min":   5.0, "lat_max":  25.0,
-    },
-    # Bay of Bengal (river discharge dominated — high relevance for MM-MARAS)
-    "bay_of_bengal": {
-        "lon_min":  80.0, "lon_max": 100.0,
-        "lat_min":   5.0, "lat_max":  23.0,
-    },
-    # Lakshadweep Sea / southwest India coast (coastal upwelling zone)
-    "lakshadweep_sea": {
-        "lon_min":  70.0, "lon_max":  80.0,
-        "lat_min":   5.0, "lat_max":  15.0,
-    },
-    # Andaman Sea (semi-enclosed, strong river/runoff signal)
-    "andaman_sea": {
-        "lon_min":  92.0, "lon_max": 100.0,
-        "lat_min":   6.0, "lat_max":  16.0,
-    },
-    # Somali / northwest Indian Ocean (Somali Current, upwelling)
-    "somali_basin": {
-        "lon_min":  40.0, "lon_max":  65.0,
-        "lat_min":  -5.0, "lat_max":  15.0,
-    },
 }
 
 # Default domain used throughout the pipeline
-ACTIVE_DOMAIN = "gulf_of_mexico"
+ACTIVE_DOMAIN = "bay_of_bengal"
 
 
 # ---------------------------------------------------------------------------
@@ -185,44 +155,51 @@ CHL_BLOOM_THRESH = 10.0      # mg/m³ — threshold for bloom classification in 
 # Computed from Copernicus global climatology; update with your regional stats.
 # ---------------------------------------------------------------------------
 NORM_STATS: Dict[str, Dict[str, float]] = {
-    "chl_log": {        # log(chl + offset), then standardized
-        "mean": -0.50,
-        "std":   1.20,
+    # Regional stats computed from Bay of Bengal training data (2019-01-01 to 2023-09-04).
+    # Update these if you switch domains — run the pipeline once and copy from
+    # data/stats/norm_stats_{domain}.json.
+    "chl_log": {        # log1p(chl), then z-scored
+        "mean":  0.146,
+        "std":   0.199,
     },
-    "thetao": {         # SST (°C)
-        "mean": 15.0,
-        "std":  10.0,
+    "thetao": {         # SST (°C) — BoB is consistently warm
+        "mean": 29.10,
+        "std":   1.24,
     },
     "uo": {             # zonal current (m/s)
-        "mean":  0.0,
-        "std":   0.3,
+        "mean": -0.005,
+        "std":   0.241,
     },
     "vo": {             # meridional current (m/s)
-        "mean":  0.0,
-        "std":   0.3,
+        "mean":  0.007,
+        "std":   0.216,
     },
-    "mlotst": {         # mixed layer depth (m)
-        "mean": 50.0,
-        "std":  60.0,
+    "mlotst": {         # MLD (m), log1p-transformed — shallow in BoB
+        "mean":  2.852,
+        "std":   0.439,
     },
-    "zos": {            # sea surface height (m)
-        "mean":  0.0,
-        "std":   0.2,
+    "zos": {            # sea surface height (m) — elevated in BoB
+        "mean":  0.596,
+        "std":   0.108,
     },
-    "uas": {            # zonal wind (m/s)
-        "mean":  0.0,
-        "std":   5.0,
+    "u10": {            # zonal 10m wind (m/s) — strong SW monsoon signal
+        "mean":  0.503,
+        "std":   3.628,
     },
-    "vas": {            # meridional wind (m/s)
-        "mean":  0.0,
-        "std":   5.0,
+    "v10": {            # meridional 10m wind (m/s)
+        "mean":  0.821,
+        "std":   3.306,
     },
+    # Aliases used in some pipeline paths
+    "uas": {"mean":  0.503, "std":  3.628},
+    "vas": {"mean":  0.821, "std":  3.306},
     # Runoff forcing (both log1p-transformed before z-scoring)
+    # These are estimated — recompute from data/stats/ after first pipeline run
     "dis24": {          # GloFAS river discharge (m³/s), log1p-transformed
         "mean":  3.5,
         "std":   2.5,
     },
-    "tp": {             # ERA5 total precipitation (m/day), log1p-transformed
+    "tp": {             # ERA5 total precipitation (mm/day), log1p-transformed
         "mean": -4.5,
         "std":   2.0,
     },
