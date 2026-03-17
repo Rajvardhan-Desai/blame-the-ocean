@@ -484,8 +484,15 @@ def download_glofas(
 
 
 def _extract_nc_from_zip(zip_path, dest_path):
-    """Extract the first .nc from a CDS zip archive."""
+    """
+    Extract all .nc files from a CDS zip archive and merge them into dest_path.
+    CDS sometimes packages different variable groups (e.g. wind vs precipitation)
+    as separate .nc files inside a single zip — extracting only the first one
+    silently drops variables. This function merges all of them.
+    """
     import zipfile
+    import tempfile
+
     with zipfile.ZipFile(str(zip_path), "r") as zf:
         nc_members = [m for m in zf.namelist() if m.endswith(".nc")]
         if not nc_members:
@@ -493,8 +500,40 @@ def _extract_nc_from_zip(zip_path, dest_path):
                 f"No .nc file found inside zip archive: {zip_path}\n"
                 f"Contents: {zf.namelist()}"
             )
-        with zf.open(nc_members[0]) as src, open(str(dest_path), "wb") as dst:
-            dst.write(src.read())
+
+        if len(nc_members) == 1:
+            # Simple case: one file, just extract it
+            with zf.open(nc_members[0]) as src, open(str(dest_path), "wb") as dst:
+                dst.write(src.read())
+            return
+
+        # Multiple files: extract each to a temp file, merge with xarray, save
+        tmp_dir = Path(zip_path).parent / "_zip_tmp"
+        tmp_dir.mkdir(exist_ok=True)
+        try:
+            tmp_paths = []
+            for member in nc_members:
+                tmp_path = tmp_dir / Path(member).name
+                with zf.open(member) as src, open(str(tmp_path), "wb") as dst:
+                    dst.write(src.read())
+                tmp_paths.append(tmp_path)
+
+            datasets = []
+            for p in tmp_paths:
+                ds = xr.open_dataset(str(p), engine="netcdf4")
+                datasets.append(ds.load())
+                ds.close()
+
+            ds_merged = xr.merge(datasets)
+            ds_merged.to_netcdf(str(dest_path))
+            ds_merged.close()
+        finally:
+            for p in tmp_paths:
+                p.unlink(missing_ok=True)
+            try:
+                tmp_dir.rmdir()
+            except OSError:
+                pass
 
 
 def download_era5_precipitation(
@@ -606,15 +645,26 @@ def download_era5_precipitation(
     # Merge monthly files into one NetCDF.
     # Write month-by-month to avoid loading all 60 files into memory at once.
     # Drop 'valid_time' — ERA5 monthly files each have a different-length
-    # Merge using netCDF4 directly, appending along the time dimension.
-    # xarray's to_netcdf(mode='a') fails when ERA5 monthly files have
-    # different-length 'valid_time' dimensions (e.g. 672 for Feb vs 744 for Mar).
+    # Merge monthly ERA5 files using netCDF4 directly.
+    # ERA5 files from CDS use 'valid_time' as the time dimension and
+    # 'latitude'/'longitude' for spatial dims. We rename these to
+    # 'time'/'lat'/'lon' for pipeline consistency and append month by month
+    # to avoid loading all 60 files into memory simultaneously.
     logger.info(f"Merging {len(chunk_paths)} monthly ERA5 files -> {merged_path}")
 
     import netCDF4 as nc4
 
-    SKIP_DIMS = {"valid_time", "expver", "number"}
-    SKIP_VARS = {"valid_time", "expver", "number"}
+    # Dimensions/variables to drop entirely (metadata artifacts)
+    SKIP = {"expver", "number"}
+    # Rename map: ERA5 name -> pipeline canonical name
+    DIM_RENAME  = {"valid_time": "time", "latitude": "lat", "longitude": "lon"}
+    VAR_RENAME  = {"valid_time": "time", "latitude": "lat", "longitude": "lon"}
+
+    def _out_dim(name):
+        return DIM_RENAME.get(name, name)
+
+    def _out_var(name):
+        return VAR_RENAME.get(name, name)
 
     with nc4.Dataset(str(merged_path), "w", format="NETCDF4") as out:
         first = True
@@ -623,37 +673,53 @@ def download_era5_precipitation(
         for p in chunk_paths:
             with nc4.Dataset(str(p), "r") as src:
 
-                if first:
-                    for name, dim in src.dimensions.items():
-                        if name in SKIP_DIMS:
-                            continue
-                        size = None if name == "time" else len(dim)
-                        out.createDimension(name, size)
+                # Identify the time dimension (valid_time or time)
+                time_dim = "valid_time" if "valid_time" in src.dimensions else "time"
+                n_steps  = len(src.dimensions[time_dim])
 
-                    for name, var in src.variables.items():
-                        if name in SKIP_VARS:
+                if first:
+                    # Create output dimensions
+                    for name, dim in src.dimensions.items():
+                        if name in SKIP:
                             continue
-                        dims = tuple(d for d in var.dimensions if d not in SKIP_DIMS)
+                        out_name = _out_dim(name)
+                        size = None if name == time_dim else len(dim)
+                        out.createDimension(out_name, size)
+
+                    # Create output variables
+                    for name, var in src.variables.items():
+                        if name in SKIP:
+                            continue
+                        out_name = _out_var(name)
+                        out_dims = tuple(
+                            _out_dim(d) for d in var.dimensions if d not in SKIP
+                        )
+                        if not out_dims:
+                            continue
                         out_var = out.createVariable(
-                            name, var.datatype, dims, zlib=True, complevel=4,
+                            out_name, var.datatype, out_dims,
+                            zlib=True, complevel=4,
                         )
                         out_var.setncatts({k: var.getncattr(k) for k in var.ncattrs()})
 
                     out.setncatts({k: src.getncattr(k) for k in src.ncattrs()})
                     first = False
 
-                n_steps = len(src.dimensions["time"])
+                # Write data for this month
                 t_sl = slice(time_index, time_index + n_steps)
-
                 for name, var in src.variables.items():
-                    if name in SKIP_VARS or name not in out.variables:
+                    if name in SKIP:
+                        continue
+                    out_name = _out_var(name)
+                    if out_name not in out.variables:
                         continue
                     data = var[:]
-                    if "time" in var.dimensions:
-                        out.variables[name][t_sl] = data
-                    else:
-                        if time_index == 0:
-                            out.variables[name][:] = data
+                    out_dims = [_out_dim(d) for d in var.dimensions if d not in SKIP]
+                    if "time" in out_dims:
+                        out.variables[out_name][t_sl] = data
+                    elif time_index == 0:
+                        # Static coordinate (lat, lon) — write once
+                        out.variables[out_name][:] = data
 
                 time_index += n_steps
 
